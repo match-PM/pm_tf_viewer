@@ -150,6 +150,7 @@ class TfViewer():
             self._frames = []
 
     def get_frames(self):
+
         return self._frames
     
     def get_existing_frame_names(self)->list[str]:
@@ -158,7 +159,8 @@ class TfViewer():
         """
         try:
             frames = yaml.safe_load(self.buffer.all_frames_as_yaml())
-            return list(frames.keys())
+            #return sorted(list(frames.keys())) # Alphabetical order /doesnt work
+            return list(frames.keys()) 
         except Exception as e:
             self.ros_node.get_logger().warn(f"Failed to get frames: {e}")
             return []
@@ -166,8 +168,8 @@ class TfViewer():
 def create_readonly_lineedit(value: str) -> QLineEdit:
     le = QLineEdit(value)
     le.setReadOnly(True)
-    le.setFrame(False)  # optional: make it look more like a label
-    le.setStyleSheet("background: transparent;")  # optional: transparent bg
+    le.setFrame(False) # optional: make it look more like a label
+    le.setStyleSheet("background: transparent;") # optional: transparent bg
     return le
 
 class TfTransformViewerItem(QWidget):
@@ -247,11 +249,24 @@ class TfTransformViewerListWidget(QListWidget):
         self.app_config = app_config
         #self.tf_list = tf_list
 
+    def sort_key(self, tf: TransformStamped): #Blueprint for sorting
+        name = tf.child_frame_id
+        if not name:
+            return (2, "")
+        first_char = name[0]
+        if first_char.isalpha():
+            return (0, name.lower())
+        elif first_char.isdigit():
+            return (1, name.lower())
+        else:
+            return (2, name.lower())
+
     def update_tf_list(self, tf_list: list[TransformStamped]):
         self.clear()
-        for tf in tf_list:
+        sorted_tf_list = sorted(tf_list, key=self.sort_key)  # Second Attempt at sorting
+        for tf in sorted_tf_list:
             item = QListWidgetItem(self)
-            widget = TfTransformViewerItem(tf,self.app_config)
+            widget = TfTransformViewerItem(tf, self.app_config)
 
             # Important: set the size hint!
             item.setSizeHint(widget.sizeHint())
