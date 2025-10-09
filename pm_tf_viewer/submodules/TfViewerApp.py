@@ -483,6 +483,7 @@ class CalculationPanel(QWidget):
         # self.remove_slide_button.clicked.connect(self.remove_last_calc_slide)
         # self.remove_all_slides_button.clicked.connect(self.delete_slides)
         self.clear_dropdown_button.clicked.connect(self.dropdown_ID_storage.clear)
+        
 
     def add_calc_slide(self, title: str = None):
         slide_number = len(self.calc_slides)
@@ -502,6 +503,12 @@ class CalculationPanel(QWidget):
         self.slides_layout.addStretch()
 
         self.update_calc_slide_dropdowns()
+        self.update_slide_names()
+
+    def update_slide_names(self):
+        for idx, slide in enumerate(self.calc_slides):
+            slide.setTitle(f"Calculation Slide {idx + 1}")
+            slide.slide_id = idx  # Ensure slide_id matches the slide number
 
     def remove_last_calc_slide(self):
         if not self.calc_slides:
@@ -660,7 +667,7 @@ class CalculationPanel(QWidget):
                         slide.qw_label.setText(qw_text if angular_unit.lower() == "quaternion" else "")
                         
                         slide.vector_length_label.setText(f"Vector length: |V| = {vector_length:.3f} {lateral_unit}")
-                        slide.units_label.setText(f"Units: Lateral: [{lateral_unit}], Angular: [{angular_unit}]")
+                        slide.units_label.setText(f"Units: Lateral: [ {lateral_unit} ], Angular: [ {angular_unit} ]")
 
                     except (KeyError, AttributeError) as e:
                         slide.clear_results()
@@ -759,6 +766,48 @@ class CalcSlides(QGroupBox):
         # Create main layout
         main_layout = QVBoxLayout()
         
+        # --- Add a horizontal bar at the top for the delete button ---
+        top_bar_layout = QHBoxLayout()
+        top_bar_layout.addStretch()
+        
+        # ADD COPY BUTTON HERE
+        self.copy_button = QPushButton("📋")
+        self.copy_button.setFixedSize(28, 28)
+        self.copy_button.setToolTip("Copy all results to clipboard")
+        self.copy_button.setStyleSheet("""
+            QPushButton {
+                background-color: #e8f4fd;
+                border: 1px solid #b8daff;
+                border-radius: 3px;
+                font-weight: bold;
+            }
+            QPushButton:hover {
+                background-color: #d1ecf1;
+            }
+        """)
+        self.copy_button.clicked.connect(self.copy_all_results)
+        top_bar_layout.addWidget(self.copy_button)
+        
+        self.delete_button = QPushButton("✖")
+        self.delete_button.setFixedSize(28, 28)
+        self.delete_button.setToolTip("Delete this calculation slide")
+        self.delete_button.setStyleSheet("""
+            QPushButton {
+                background-color: #f8d7da;
+                border: 1px solid #f5c6cb;
+                border-radius: 3px;
+                color: #721c24;
+                font-weight: bold;
+            }
+            QPushButton:hover {
+                background-color: #f1b0b7;
+            }
+        """)
+        self.delete_button.clicked.connect(self.delete_self)
+        top_bar_layout.addWidget(self.delete_button)
+        main_layout.addLayout(top_bar_layout)
+        # -------------------------------------------------------------
+
         # Create grid layout for better alignment
         grid_layout = QGridLayout()
         grid_layout.setColumnStretch(0, 0)  # Frame 1 column
@@ -825,6 +874,87 @@ class CalcSlides(QGroupBox):
         
         # Initialize result labels
         self.init_result_labels()
+
+    # ADD COPY METHOD HERE
+    def copy_all_results(self):
+        """Copy all results to clipboard in formatted text"""
+        try:
+            # Get current values from all labels
+            frame1_text = self.pos1_label.text().replace("Frame 1 = ", "")
+            frame2_text = self.pos2_label.text().replace("Frame 2 = ", "")
+            dx_text = self.dx_label.text().replace("Δx = ", "")
+            dy_text = self.dy_label.text().replace("Δy = ", "")
+            dz_text = self.dz_label.text().replace("Δz = ", "")
+            roll_text = self.roll_label.text().replace("ΔRoll = ", "")
+            pitch_text = self.pitch_label.text().replace("ΔPitch = ", "")
+            yaw_text = self.yaw_label.text().replace("ΔYaw = ", "")
+            qw_text = self.qw_label.text().replace("Δqw = ", "")
+            vector_text = self.vector_length_label.text().replace("Vector length: |V| = ", "")
+            units_text = self.units_label.text().replace("Units: ", "")
+            
+            results_text = f"""CALCULATION SLIDE {self.slide_id + 1}
+============================
+Parent Frame: {self.calculation_panel.app_config.get_parent_frame()}
+
+FRAMES:
+• Frame 1: {frame1_text}
+• Frame 2: {frame2_text}
+
+VECTOR DIFFERENCE:
+• Δx = {dx_text}
+• Δy = {dy_text}  
+• Δz = {dz_text}
+
+ROTATION DIFFERENCE:
+• ΔRoll = {roll_text}
+• ΔPitch = {pitch_text}
+• ΔYaw = {yaw_text}
+• Δqw = {qw_text}
+
+SUMMARY:
+• Vector Length: {vector_text}
+• Units: {units_text}
+============================"""
+            
+            QApplication.clipboard().setText(results_text)
+            
+            # Show brief confirmation
+            self.copy_button.setText("✓")
+            self.copy_button.setStyleSheet("background-color: #d4edda; border: 1px solid #c3e6cb;")
+            QTimer.singleShot(1000, self.reset_copy_button)
+            
+            self.calculation_panel.ros_node.get_logger().info(f"Calculation Slide {self.slide_id} results copied to clipboard")
+            
+        except Exception as e:
+            self.calculation_panel.ros_node.get_logger().error(f"Failed to copy results: {str(e)}")
+
+    # ADD RESET BUTTON METHOD HERE
+    def reset_copy_button(self):
+        """Reset copy button to original state"""
+        self.copy_button.setText("📋")
+        self.copy_button.setStyleSheet("""
+            QPushButton {
+                background-color: #e8f4fd;
+                border: 1px solid #b8daff;
+                border-radius: 3px;
+                font-weight: bold;
+            }
+            QPushButton:hover {
+                background-color: #d1ecf1;
+            }
+        """)
+
+    def delete_self(self):
+        # Remove from CalculationPanel's slide list and layout
+        if self in self.calculation_panel.calc_slides:
+            self.calculation_panel.calc_slides.remove(self)
+        self.calculation_panel.remove_frozen_data_for_slide(self.slide_id)
+        self.setParent(None)
+        self.deleteLater()
+        # Optionally, update dropdowns and calculations
+        self.calculation_panel.update_calc_slide_dropdowns()
+        self.calculation_panel.auto_calculations()
+        self.calculation_panel.update_slide_names()
 
     def init_result_labels(self):
         """Initialize all the labels for displaying results in grid format"""
@@ -925,7 +1055,7 @@ class CalcSlides(QGroupBox):
         self.yaw_label.setText("ΔYaw = ")
         self.vector_length_label.setText("Vector length: |V| = ")
         self.units_label.setText("Units: ")
-
+    
 
 
 class ClickableLabel(QLabel):  # Remove CalculationPanel inheritance
