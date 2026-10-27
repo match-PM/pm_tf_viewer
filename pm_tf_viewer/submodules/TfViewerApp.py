@@ -28,6 +28,7 @@ from PyQt6.QtWidgets import (QScrollArea,
                              QFileDialog,
                              QTableWidgetItem,
                             QTableWidget,
+                            QTabWidget,
                             )
 
 from scipy.spatial.transform import Rotation as R
@@ -43,6 +44,8 @@ from geometry_msgs.msg import TransformStamped, Transform
 
 import rclpy
 import yaml
+
+from .calculation_panel import CalculationPanel
 
 
 class TfViewerAppConfig():
@@ -125,7 +128,7 @@ class TfViewer():
 
     def update_tf_frames(self):
         try:
-            frames:dict = yaml.safe_load(self.buffer.all_frames_as_yaml())
+            frames:dict = (yaml.safe_load(self.buffer.all_frames_as_yaml()) or {})
             
             self._frames = []
             keys = list(frames.keys())
@@ -136,9 +139,6 @@ class TfViewer():
 
                 try:
                     trans = self.buffer.lookup_transform(parent_frame, child_frame, rclpy.time.Time())
-                    trans.transform.translation.x *= self.config.get_lateral_unit_conversion()
-                    trans.transform.translation.y *= self.config.get_lateral_unit_conversion()
-                    trans.transform.translation.z *= self.config.get_lateral_unit_conversion()
                     self._frames.append(trans)
 
                 except Exception as e:
@@ -157,7 +157,7 @@ class TfViewer():
         Returns a list of existing frame names.
         """
         try:
-            frames = yaml.safe_load(self.buffer.all_frames_as_yaml())
+            frames = (yaml.safe_load(self.buffer.all_frames_as_yaml()) or {})
             return list(frames.keys())
         except Exception as e:
             self.ros_node.get_logger().warn(f"Failed to get frames: {e}")
@@ -180,7 +180,7 @@ class TfTransformViewerItem(QWidget):
         self.app_config = app_config
 
         # Create widgets for displaying transform data
-        self.child_frame_id_label = QLabel(f"Frame: {tf.child_frame_id}")
+        self.child_frame_id_label = QLabel(f"{tf.child_frame_id}")
 
         # Add widgets to layout
         #self.main_layout.addWidget(self.frame_id_label)
@@ -192,12 +192,13 @@ class TfTransformViewerItem(QWidget):
         transform_layout.addWidget(QLabel("Rotation:"),    0, 2, 1, 2)
 
         # Translation labels and values
+        scale = self.app_config.get_lateral_unit_conversion()
         transform_layout.addWidget(QLabel("x:"), 1, 0)
-        transform_layout.addWidget(create_readonly_lineedit(f"{tf.transform.translation.x:.9f}"), 1, 1)
+        transform_layout.addWidget(create_readonly_lineedit(f"{tf.transform.translation.x * scale:.9f}"), 1, 1)
         transform_layout.addWidget(QLabel("y:"), 2, 0)
-        transform_layout.addWidget(create_readonly_lineedit(f"{tf.transform.translation.y:.9f}"), 2, 1)
+        transform_layout.addWidget(create_readonly_lineedit(f"{tf.transform.translation.y * scale:.9f}"), 2, 1)
         transform_layout.addWidget(QLabel("z:"), 3, 0)
-        transform_layout.addWidget(create_readonly_lineedit(f"{tf.transform.translation.z:.9f}"), 3, 1)
+        transform_layout.addWidget(create_readonly_lineedit(f"{tf.transform.translation.z * scale:.9f}"), 3, 1)
 
         if self.app_config.get_angular_unit() == 'Quaternion':
             # Rotation labels and values
@@ -241,16 +242,32 @@ class TfTransformViewerItem(QWidget):
 
 
 class TfTransformViewerListWidget(QListWidget):
+    transform_ID_selected = pyqtSignal(str)
+
     def __init__(self, tf_list:list[TransformStamped], 
                  app_config: TfViewerAppConfig):
         super().__init__()
         self.app_config = app_config
-        #self.tf_list = tf_list
+        self.itemDoubleClicked.connect(
+            lambda item: self.transform_ID_selected.emit(
+                item.data(Qt.ItemDataRole.UserRole)))
+
+    @staticmethod
+    def sort_key(tf):
+        name = tf.child_frame_id
+        category = 0 if name[:1].isalpha() else 1 if name[:1].isdigit() else 2
+        return category, name.casefold(), name
 
     def update_tf_list(self, tf_list: list[TransformStamped]):
         self.clear()
-        for tf in tf_list:
-            item = QListWidgetItem(self)
+        for tf in sorted(tf_list, key=self.sort_key):
+
+            # if tf.child_frame_id not in ['Cal_Tool_Vision_Frame_1','Cal_Tool_Vision_Frame_2',
+            #                              'Cal_Tool_Vision_Frame_3','Cal_Tool_Vision_Frame_4','PM_Robot_Tool_TCP','PM_Robot_Tool_TCP_Test','Camera_Station_TCP']:
+            #     continue
+            # Create a new QListWidgetItem and set the widget
+            item = QListWidgetItem()
+            item.setData(Qt.ItemDataRole.UserRole, tf.child_frame_id)
             widget = TfTransformViewerItem(tf,self.app_config)
 
             # Important: set the size hint!
@@ -270,45 +287,72 @@ class TfViewerApp(QMainWindow):
                                   self.config)
 
         self.setWindowTitle("TF Viewer")
-        self.main_layout = QGridLayout()
+        self.main_layout = QVBoxLayout()
         self.main_widget = QWidget()
         self.main_widget.setLayout(self.main_layout)
         self.setCentralWidget(self.main_widget)
 
-            # def refresh button
+        controls = QHBoxLayout()
+        self.main_layout.addLayout(controls)
         self.refresh_button = QPushButton("Refresh Transforms")
         self.refresh_button.clicked.connect(self.refresh_button_event)
-        self.main_layout.addWidget(self.refresh_button)
 
         # create drop down menu with sting list
         self.parent_frame_combo = QComboBox(self)
         self.parent_frame_combo.activated.connect(self.on_parent_frame_activated)
-        self.main_layout.addWidget(self.parent_frame_combo)
+        controls.addWidget(QLabel("Parent frame:"))
+        controls.addWidget(self.parent_frame_combo, 1)
 
         self.lateral_unit_combo = QComboBox(self)
         self.lateral_unit_combo.addItems(self.config.get_lateral_unit_list())
         self.lateral_unit_combo.setCurrentText(self.config.get_lateral_unit())
         self.lateral_unit_combo.currentTextChanged.connect(self.lateral_unit_changed_event)
-        self.main_layout.addWidget(self.lateral_unit_combo)
+        controls.addWidget(QLabel("Translation:"))
+        controls.addWidget(self.lateral_unit_combo)
         self.angular_unit_combo = QComboBox(self)
         self.angular_unit_combo.addItems(self.config.get_angular_unit_list())
         self.angular_unit_combo.setCurrentText(self.config.get_angular_unit())
         self.angular_unit_combo.currentTextChanged.connect(self.angular_unit_changed_event)
-        self.main_layout.addWidget(self.angular_unit_combo)
+        controls.addWidget(QLabel("Rotation:"))
+        controls.addWidget(self.angular_unit_combo)
+        controls.addWidget(self.refresh_button)
 
         self.tf_viewer_list = TfTransformViewerListWidget(self.tf_viewer._frames, 
                                                          self.config)
         
-        self.main_layout.addWidget(self.tf_viewer_list)
+        self.tabs = QTabWidget()
+        self.tabs.addTab(self.tf_viewer_list, "Transforms")
+        self.calc_panel = CalculationPanel(self.config, ros_node)
+        self.calc_panel.add_slide()
+        self.calc_panel.settings_loaded.connect(self.on_calculation_settings_loaded)
+        self.tabs.addTab(self.calc_panel, "Calculation Panel")
+        self.main_layout.addWidget(self.tabs)
+        self.tf_viewer_list.transform_ID_selected.connect(
+            self.calc_panel.receive_translation_data)
+        screen = QApplication.primaryScreen()
+        if screen is not None:
+            available = screen.availableGeometry()
+            self.resize(min(1100, available.width()), min(800, available.height()))
 
 
         # update the list initially
         self.update_list()
+        QTimer.singleShot(500, self.refresh_button_event)
 
         ## Timer to update table
         #self.timer = QTimer(self)
         #self.timer.timeout.connect(self.update_list)
         #self.timer.start(5000)  # update every second
+
+    def on_calculation_settings_loaded(self):
+        for combo, value in (
+            (self.lateral_unit_combo, self.config.get_lateral_unit()),
+            (self.angular_unit_combo, self.config.get_angular_unit()),
+        ):
+            combo.blockSignals(True)
+            combo.setCurrentText(value)
+            combo.blockSignals(False)
+        self.update_list()
 
     def on_parent_frame_activated(self, index: int):
         selected_text = self.parent_frame_combo.itemText(index)
@@ -333,6 +377,8 @@ class TfViewerApp(QMainWindow):
         self.tf_viewer.update_tf_frames()
         self.tf_viewer_list.update_tf_list(self.tf_viewer.get_frames())
         self.config.update_existing_frames(self.tf_viewer.get_existing_frame_names())
+        self.update_parent_list()
+        self.calc_panel.update_frames(self.tf_viewer.get_frames())
         
     def parent_frame_changed_event(self, parent_frame_name:str):
         current_parent_frame = parent_frame_name
